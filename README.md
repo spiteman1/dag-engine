@@ -61,7 +61,7 @@ A custom Directed Acyclic Graph (DAG) task execution engine built from scratch. 
 
 ## Build Phases
 
-- [ ] **Phase 1** -- Project Initialisation & Architecture (scaffolding, Docker Compose)
+- [x] **Phase 1** -- Project Initialisation & Architecture (scaffolding, Docker Compose)
 - [ ] **Phase 2** -- The State Machine (database schema & SQLAlchemy async models)
 - [ ] **Phase 3** -- The Brain (graph algorithms: cycle detection & topological sort)
 - [ ] **Phase 4** -- The Command Tent (FastAPI REST endpoints)
