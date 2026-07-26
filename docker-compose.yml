@@ -1,0 +1,117 @@
+# =============================================================================
+# DAG Engine - Docker Compose
+# =============================================================================
+# Defines the infrastructure services for local development.
+# The API and worker services are omitted here -- they run directly with
+# Python locally during development and will be added for production.
+#
+# Usage:
+#   Start services:   docker compose up -d
+#   Stop services:    docker compose down
+#   Wipe all data:    docker compose down -v
+# =============================================================================
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL 15 - Primary relational database
+  # Stores DAG definitions, task definitions, and task run state.
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:15-alpine
+    # alpine = minimal Linux image, significantly smaller than the full image.
+    # In production you want smaller images -- less surface area for security
+    # vulnerabilities, faster pulls, cheaper storage.
+
+    container_name: dag_engine_postgres
+
+    environment:
+      # These environment variables are read by the official Postgres image
+      # on first startup to initialise the database.
+      POSTGRES_USER: dag_user
+      POSTGRES_PASSWORD: dag_password
+      POSTGRES_DB: dag_engine
+
+    ports:
+      # host_port:container_port
+      # Exposes Postgres on your local machine at port 5432 so your Python
+      # code running outside Docker can connect to it during development.
+      - "5432:5432"
+
+    volumes:
+      # Named volume -- persists your database data between container restarts.
+      # Without this, every `docker compose down` would wipe your tables.
+      # Think of it as a hard drive that lives independently of the container.
+      - postgres_data:/var/lib/postgresql/data
+
+    networks:
+      - dag_network
+
+    healthcheck:
+      # Runs pg_isready inside the container to verify Postgres is accepting
+      # connections -- not just that the container has started.
+      # This prevents dependent services from connecting before DB is ready.
+      test: ["CMD-SHELL", "pg_isready -U dag_user -d dag_engine"]
+      interval: 10s    # check every 10 seconds
+      timeout: 5s      # fail the check if it takes longer than 5 seconds
+      retries: 5       # mark unhealthy after 5 consecutive failures
+      start_period: 10s # give Postgres 10s to initialise before checks begin
+
+    restart: unless-stopped
+    # Automatically restarts the container if it crashes.
+    # unless-stopped means it won't restart if you manually stop it.
+    # Essential for a VPS deployment where nobody is watching 24/7.
+
+  # ---------------------------------------------------------------------------
+  # Redis 7 - Message broker and task queue
+  # Workers pop task IDs from the Redis list using BRPOP.
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+
+    container_name: dag_engine_redis
+
+    command: redis-server --appendonly yes
+    # --appendonly yes enables AOF (Append Only File) persistence.
+    # By default Redis is in-memory only -- if the container restarts,
+    # your entire task queue is gone. AOF writes every operation to disk
+    # so the queue survives restarts. Critical for a task scheduler.
+
+    ports:
+      - "6379:6379"
+
+    volumes:
+      - redis_data:/data
+      # /data is where Redis writes its AOF file inside the container.
+
+    networks:
+      - dag_network
+
+    healthcheck:
+      # redis-cli ping returns "PONG" if Redis is healthy.
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+    restart: unless-stopped
+
+# =============================================================================
+# Volumes - Named volumes managed by Docker, persist independently of containers
+# =============================================================================
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+
+# =============================================================================
+# Networks - Shared bridge network so services discover each other by name
+# =============================================================================
+networks:
+  dag_network:
+    driver: bridge
+    # Services on this network reach each other using their service name
+    # as the hostname. e.g. postgresql://dag_user:dag_password@postgres:5432/dag_engine
+    # "postgres" resolves to the container's internal IP automatically.
