@@ -85,11 +85,11 @@ A custom Directed Acyclic Graph (DAG) task execution engine built from scratch i
 
 ## Build Phases
 
-- [x] **Phase 1** -- Project Initialisation & Architecture (scaffolding, Docker Compose)
-- [x] **Phase 2** -- The State Machine (database schema & SQLAlchemy async models)
-- [x] **Phase 3** -- The Brain (graph algorithms: cycle detection & topological sort)
-- [x] **Phase 4** -- The Command Tent (FastAPI REST endpoints)
-- [x] **Phase 5** -- The Frontline Troops (distributed async workers)
+✅ **Phase 1** -- Project Initialisation & Architecture (scaffolding, Docker Compose)
+✅ **Phase 2** -- The State Machine (database schema & SQLAlchemy async models)
+✅ **Phase 3** -- The Brain (graph algorithms: cycle detection & topological sort)
+✅ **Phase 4** -- The Command Tent (FastAPI REST endpoints)
+✅ **Phase 5** -- The Frontline Troops (distributed async workers)
 
 ---
 
@@ -106,28 +106,57 @@ A custom Directed Acyclic Graph (DAG) task execution engine built from scratch i
 
 ---
 
-## What's Not Done Yet
+## Roadmap
 
-> This section is intentionally honest. The foundation is sound but the following gaps need to be addressed before this project could be considered complete or production-ready.
+> Everything below represents the gap between the current v0.1 foundation and a truly complete, production-grade system.
 
-### Functional Gaps
+### 🔴 Critical -- Must Fix
 
-| Gap | Description |
-|-----|-------------|
-| **FAILED task handling** | Workers do not currently mark tasks as `FAILED` when an exception occurs. A crashed task hangs in `RUNNING` indefinitely. |
-| **FAILED fanout** | If a parent task fails, downstream dependent tasks should be marked `FAILED` automatically rather than left in `PENDING`. |
-| **List DAGs endpoint** | No `GET /dags` endpoint exists to retrieve all DAG definitions. |
-| **Per-run status filtering** | `GET /dags/{id}/status` returns all historical runs for a DAG. It should support filtering by `dag_run_id` to inspect a single execution. |
+| Item | Description |
+|------|-------------|
+| **FAILED task state** | Workers do not mark tasks `FAILED` when an exception occurs. A crashed task hangs in `RUNNING` indefinitely. |
+| **FAILED fanout propagation** | If a parent task fails, all downstream dependents must be marked `FAILED` automatically, not left in `PENDING`. |
+| **`GET /dags` endpoint** | No endpoint to list all DAG definitions -- a basic omission. |
+| **Per-run status filtering** | `GET /dags/{id}/status` returns all historical runs. Needs filtering by `dag_run_id` to inspect a specific execution. |
 
-### Quality & Hardening Gaps
+### 🟡 Important -- Should Do
 
-| Gap | Description |
-|-----|-------------|
-| **API integration tests** | `tests/test_graph.py` covers the graph algorithms but there are no integration tests for the REST endpoints using `httpx`. |
-| **pytest configuration** | No `pytest.ini` or `pyproject.toml` to configure pytest-asyncio mode -- async tests may not run correctly without this. |
-| **Real command execution** | Workers currently simulate execution with `asyncio.sleep()`. Real shell command execution via `asyncio.subprocess` is not implemented. |
-| **Authentication** | The API has no authentication or authorisation layer. All endpoints are publicly accessible. |
-| **Observability** | No structured logging, metrics, or distributed tracing is in place. |
+| Item | Description |
+|------|-------------|
+| **API integration tests** | No tests for the REST layer. Need `httpx`-based tests for all three endpoints covering happy path and error cases. |
+| **`pytest.ini` / `pyproject.toml`** | pytest-asyncio mode is not configured -- async tests may silently not execute correctly. |
+| **Real command execution** | Workers simulate tasks with `asyncio.sleep()`. Real shell execution via `asyncio.subprocess` is the actual goal. |
+| **`GET /dags` list endpoint** | Ability to paginate and filter all stored DAG definitions. |
+| **DAG deletion endpoint** | `DELETE /dags/{dag_id}` with cascade cleanup of tasks and runs. |
+
+### 🟢 Production Hardening
+
+| Item | Description |
+|------|-------------|
+| **Authentication** | API has no auth layer. JWT-based authentication should protect all endpoints. |
+| **Rate limiting** | No request throttling on the API. Required before any public deployment. |
+| **Structured logging** | Replace `print`/basic logging with structured JSON logs (e.g. using `structlog`). |
+| **Metrics & observability** | Instrument with Prometheus metrics -- queue depth, task duration, success/failure rates. |
+| **Worker retry logic** | Failed tasks should be retried N times with exponential backoff before being marked permanently `FAILED`. |
+| **Idempotent task claiming** | Add a database-level lock when a worker claims a task to prevent two workers processing the same task under high load. |
+
+### 🚀 Deployment
+
+| Item | Description |
+|------|-------------|
+| **Dockerise the application** | Add `Dockerfile` for the API server and worker so everything runs in containers, not just the infrastructure. |
+| **Production `docker-compose.yml`** | A production compose override that includes the API and worker services alongside Postgres and Redis. |
+| **VPS deployment** | Deploy to a DigitalOcean or Hetzner droplet. Target: public URL with live Swagger UI accessible. |
+| **Environment secrets management** | Move secrets out of `.env` into proper secrets management (e.g. Docker secrets or a vault solution). |
+
+### 💡 Algorithmic Improvements
+
+| Item | Description |
+|------|-------------|
+| **Weighted task scheduling** | Allow tasks to declare an estimated duration. The scheduler could prioritise longer tasks first (critical path scheduling) to minimise total DAG execution time. |
+| **Task timeout enforcement** | Workers should enforce a per-task maximum execution time and mark the task `FAILED` if exceeded. |
+| **Priority queue** | Replace the simple Redis list with a sorted set to support task priority levels. |
+| **Dead letter queue** | Tasks that fail repeatedly should be moved to a dead letter queue for manual inspection rather than being silently dropped. |
 
 ---
 
