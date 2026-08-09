@@ -1,8 +1,12 @@
 # DAG Engine
 
-A custom Directed Acyclic Graph (DAG) task execution engine built from scratch. Think of it as a lightweight Apache Airflow -- accept DAG definitions via a REST API, resolve task dependencies using topological sorting, and distribute workloads across multiple asynchronous Python workers using a message broker.
+> **Status: Active Development -- v0.1.0 Foundation**
 
-**This project is a hands-on systems engineering build. Every component is written from scratch to understand distributed systems at a fundamental level.**
+A custom Directed Acyclic Graph (DAG) task execution engine built from scratch in Python. Conceptually similar to a lightweight Apache Airflow -- DAG definitions are submitted via a REST API, dependencies are resolved using graph algorithms, and workloads are distributed across multiple asynchronous workers via a Redis message broker.
+
+**This is a learning-driven systems engineering project. Every component is written from scratch to deeply understand how distributed task orchestration works at a fundamental level. The foundation is complete and functional, but this is explicitly a v0.1 -- significant work remains before this would be considered production-grade.**
+
+---
 
 ## Architecture Overview
 
@@ -31,19 +35,23 @@ A custom Directed Acyclic Graph (DAG) task execution engine built from scratch. 
                         └──────────┘  └──────────┘  └──────────┘
 ```
 
+---
+
 ## Tech Stack
 
-| Component       | Technology                      |
-| --------------- | ------------------------------- |
-| Backend API     | FastAPI (Python 3.11+)          |
-| Database        | PostgreSQL 15                   |
-| ORM             | SQLAlchemy 2.0 (Async)          |
-| Migrations      | Alembic                         |
-| Message Broker  | Redis 7                         |
-| Workers         | Custom Python AsyncIO           |
-| Validation      | Pydantic v2                     |
-| Testing         | pytest                          |
-| Containerisation| Docker & Docker Compose         |
+| Component        | Technology                    |
+| ---------------- | ----------------------------- |
+| Backend API      | FastAPI (Python 3.11+)        |
+| Database         | PostgreSQL 15                 |
+| ORM              | SQLAlchemy 2.0 (Async)        |
+| Migrations       | Alembic                       |
+| Message Broker   | Redis 7                       |
+| Workers          | Custom Python AsyncIO         |
+| Validation       | Pydantic v2                   |
+| Testing          | pytest                        |
+| Containerisation | Docker & Docker Compose       |
+
+---
 
 ## Project Structure
 
@@ -73,6 +81,8 @@ A custom Directed Acyclic Graph (DAG) task execution engine built from scratch. 
 └── requirements.txt           # Pinned dependencies
 ```
 
+---
+
 ## Build Phases
 
 - [x] **Phase 1** -- Project Initialisation & Architecture (scaffolding, Docker Compose)
@@ -81,15 +91,45 @@ A custom Directed Acyclic Graph (DAG) task execution engine built from scratch. 
 - [x] **Phase 4** -- The Command Tent (FastAPI REST endpoints)
 - [x] **Phase 5** -- The Frontline Troops (distributed async workers)
 
-## Key Features
+---
 
-- **DAG Submission via REST API** -- Define DAGs and their tasks through JSON payloads
-- **Cycle Detection** -- DFS-based validation ensures no infinite loops exist before saving
-- **Topological Sort** -- Kahn's Algorithm resolves execution order grouped by parallel tiers
-- **Distributed Workers** -- Multiple async workers pull tasks from Redis concurrently
-- **Dependency Fanout** -- Workers automatically enqueue downstream tasks when all parents succeed
-- **Real-Time Status** -- Query the execution state of any DAG and its tasks at any time
+## What's Working (v0.1 Foundation)
+
+- **DAG Submission via REST API** -- Define DAGs and tasks through JSON payloads
+- **Cycle Detection** -- DFS-based validation rejects invalid DAGs before they touch the database
+- **Topological Sort** -- Kahn's Algorithm resolves execution order grouped into parallel tiers
+- **Distributed Workers** -- Multiple async worker instances pull tasks from Redis concurrently via BRPOP
+- **Dependency Fanout** -- Workers automatically enqueue downstream tasks once all parent tasks succeed
+- **Real-Time Status** -- Query the execution state of a DAG and all its tasks at any point
+- **Database Migrations** -- Alembic with async SQLAlchemy support, initial schema in place
 - **Interactive API Docs** -- Auto-generated Swagger UI at `/docs`
+
+---
+
+## What's Not Done Yet
+
+> This section is intentionally honest. The foundation is sound but the following gaps need to be addressed before this project could be considered complete or production-ready.
+
+### Functional Gaps
+
+| Gap | Description |
+|-----|-------------|
+| **FAILED task handling** | Workers do not currently mark tasks as `FAILED` when an exception occurs. A crashed task hangs in `RUNNING` indefinitely. |
+| **FAILED fanout** | If a parent task fails, downstream dependent tasks should be marked `FAILED` automatically rather than left in `PENDING`. |
+| **List DAGs endpoint** | No `GET /dags` endpoint exists to retrieve all DAG definitions. |
+| **Per-run status filtering** | `GET /dags/{id}/status` returns all historical runs for a DAG. It should support filtering by `dag_run_id` to inspect a single execution. |
+
+### Quality & Hardening Gaps
+
+| Gap | Description |
+|-----|-------------|
+| **API integration tests** | `tests/test_graph.py` covers the graph algorithms but there are no integration tests for the REST endpoints using `httpx`. |
+| **pytest configuration** | No `pytest.ini` or `pyproject.toml` to configure pytest-asyncio mode -- async tests may not run correctly without this. |
+| **Real command execution** | Workers currently simulate execution with `asyncio.sleep()`. Real shell command execution via `asyncio.subprocess` is not implemented. |
+| **Authentication** | The API has no authentication or authorisation layer. All endpoints are publicly accessible. |
+| **Observability** | No structured logging, metrics, or distributed tracing is in place. |
+
+---
 
 ## API Endpoints
 
@@ -97,9 +137,11 @@ A custom Directed Acyclic Graph (DAG) task execution engine built from scratch. 
 |--------|----------|-------------|
 | `POST` | `/dags` | Create a new DAG definition (validates for cycles) |
 | `POST` | `/dags/{dag_id}/run` | Trigger a DAG execution |
-| `GET` | `/dags/{dag_id}/status` | Real-time status of all tasks |
+| `GET` | `/dags/{dag_id}/status` | Real-time status of all task runs |
 | `GET` | `/health` | Liveness probe |
 | `GET` | `/docs` | Interactive Swagger UI |
+
+---
 
 ## Getting Started
 
@@ -150,6 +192,8 @@ WORKER_ID=worker-2 python -m dag_engine.worker.worker
 
 Visit [http://localhost:8000/docs](http://localhost:8000/docs)
 
+---
+
 ## Example Usage
 
 ### Create a DAG
@@ -180,11 +224,15 @@ curl -X POST http://localhost:8000/dags/{dag_id}/run
 curl http://localhost:8000/dags/{dag_id}/status
 ```
 
+---
+
 ## Running Tests
 
 ```bash
 pytest tests/ -v
 ```
+
+---
 
 ## Author
 
