@@ -2,26 +2,24 @@
 
 A custom Directed Acyclic Graph (DAG) task execution engine built from scratch. Think of it as a lightweight Apache Airflow -- accept DAG definitions via a REST API, resolve task dependencies using topological sorting, and distribute workloads across multiple asynchronous Python workers using a message broker.
 
-**This project is a hands-on learning build. Every component is written from scratch to understand distributed systems at a fundamental level.**
+**This project is a hands-on systems engineering build. Every component is written from scratch to understand distributed systems at a fundamental level.**
 
 ## Architecture Overview
 
 ```
                     ┌─────────────────┐
                     │   FastAPI REST   │
-                    │      API         │
+                    │   API (/docs)    │
                     └────────┬────────┘
                              │
               ┌──────────────┼──────────────┐
               │              │              │
               ▼              ▼              ▼
         ┌──────────┐  ┌──────────┐  ┌──────────────┐
-        │  Graph   │  │ PostgreSQL│  │    Redis      │
-        │  Engine  │  │   (State) │  │ (Task Queue)  │
-        │ (Topo    │  │           │  │               │
-        │  Sort +  │  │           │  │               │
-        │  Cycle   │  │           │  │               │
-        │  Detect) │  │           │  │               │
+        │  Graph   │  │PostgreSQL│  │    Redis      │
+        │  Engine  │  │  (State) │  │ (Task Queue)  │
+        │ Topo Sort│  │SQLAlchemy│  │    BRPOP      │
+        │ DFS Cycle│  │  Async   │  │               │
         └──────────┘  └──────────┘  └───────┬───────┘
                                             │
                               ┌─────────────┼─────────────┐
@@ -39,10 +37,11 @@ A custom Directed Acyclic Graph (DAG) task execution engine built from scratch. 
 | --------------- | ------------------------------- |
 | Backend API     | FastAPI (Python 3.11+)          |
 | Database        | PostgreSQL 15                   |
-| ORM             | SQLAlchemy (Async)              |
+| ORM             | SQLAlchemy 2.0 (Async)          |
 | Migrations      | Alembic                         |
 | Message Broker  | Redis 7                         |
 | Workers         | Custom Python AsyncIO           |
+| Validation      | Pydantic v2                     |
 | Testing         | pytest                          |
 | Containerisation| Docker & Docker Compose         |
 
@@ -50,36 +49,144 @@ A custom Directed Acyclic Graph (DAG) task execution engine built from scratch. 
 
 ```
 /dag_engine
-├── api/            # FastAPI routes and dependency injection
-├── core/           # Topological sort, cycle detection, configuration
-├── db/             # SQLAlchemy models, session management, Alembic migrations
-├── worker/         # Standalone async worker scripts, Redis polling logic
-├── tests/          # pytest suite
-├── docker-compose.yml
-└── requirements.txt
+├── dag_engine/
+│   ├── api/
+│   │   ├── main.py            # FastAPI app entry point, CORS, health check
+│   │   ├── schemas.py         # Pydantic request/response models
+│   │   └── routes/
+│   │       └── dags.py        # POST /dags, POST /dags/{id}/run, GET /dags/{id}/status
+│   ├── core/
+│   │   ├── config.py          # Pydantic-settings config (env vars, .env file)
+│   │   └── graph.py           # DFS cycle detection + Kahn's topological sort
+│   ├── db/
+│   │   ├── base.py            # Async engine, session factory, Base class
+│   │   └── models.py          # DagDefinition, TaskDefinition, TaskRun ORM models
+│   └── worker/
+│       └── worker.py          # Standalone async worker with Redis BRPOP + fanout
+├── alembic/                   # Database migrations
+│   └── versions/
+│       └── 001_initial_schema.py
+├── tests/
+│   └── test_graph.py          # Unit tests for graph algorithms
+├── .env.example               # Environment variable template
+├── docker-compose.yml         # PostgreSQL 15 + Redis 7 services
+└── requirements.txt           # Pinned dependencies
 ```
 
 ## Build Phases
 
 - [x] **Phase 1** -- Project Initialisation & Architecture (scaffolding, Docker Compose)
-- [ ] **Phase 2** -- The State Machine (database schema & SQLAlchemy async models)
-- [ ] **Phase 3** -- The Brain (graph algorithms: cycle detection & topological sort)
-- [ ] **Phase 4** -- The Command Tent (FastAPI REST endpoints)
-- [ ] **Phase 5** -- The Frontline Troops (distributed async workers)
+- [x] **Phase 2** -- The State Machine (database schema & SQLAlchemy async models)
+- [x] **Phase 3** -- The Brain (graph algorithms: cycle detection & topological sort)
+- [x] **Phase 4** -- The Command Tent (FastAPI REST endpoints)
+- [x] **Phase 5** -- The Frontline Troops (distributed async workers)
 
 ## Key Features
 
 - **DAG Submission via REST API** -- Define DAGs and their tasks through JSON payloads
 - **Cycle Detection** -- DFS-based validation ensures no infinite loops exist before saving
 - **Topological Sort** -- Kahn's Algorithm resolves execution order grouped by parallel tiers
-- **Distributed Workers** -- Multiple async workers pull tasks from Redis and execute concurrently
+- **Distributed Workers** -- Multiple async workers pull tasks from Redis concurrently
 - **Dependency Fanout** -- Workers automatically enqueue downstream tasks when all parents succeed
 - **Real-Time Status** -- Query the execution state of any DAG and its tasks at any time
+- **Interactive API Docs** -- Auto-generated Swagger UI at `/docs`
+
+## API Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/dags` | Create a new DAG definition (validates for cycles) |
+| `POST` | `/dags/{dag_id}/run` | Trigger a DAG execution |
+| `GET` | `/dags/{dag_id}/status` | Real-time status of all tasks |
+| `GET` | `/health` | Liveness probe |
+| `GET` | `/docs` | Interactive Swagger UI |
 
 ## Getting Started
 
-> Coming soon -- Phase 1 will add Docker Compose and dependency setup instructions.
+### Prerequisites
+- Docker & Docker Compose
+- Python 3.11+
+
+### 1. Clone and configure environment
+
+```bash
+git clone https://github.com/spiteman1/dag-engine.git
+cd dag-engine
+cp .env.example .env
+```
+
+### 2. Start infrastructure services
+
+```bash
+docker compose up -d
+```
+
+### 3. Install dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+### 4. Run database migrations
+
+```bash
+alembic upgrade head
+```
+
+### 5. Start the API server
+
+```bash
+uvicorn dag_engine.api.main:app --reload
+```
+
+### 6. Start one or more workers (in separate terminals)
+
+```bash
+WORKER_ID=worker-1 python -m dag_engine.worker.worker
+WORKER_ID=worker-2 python -m dag_engine.worker.worker
+```
+
+### 7. Open the interactive API docs
+
+Visit [http://localhost:8000/docs](http://localhost:8000/docs)
+
+## Example Usage
+
+### Create a DAG
+
+```bash
+curl -X POST http://localhost:8000/dags \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "data_pipeline",
+    "description": "Daily ETL pipeline",
+    "tasks": [
+      {"name": "extract",   "command": "python extract.py",   "dependencies": []},
+      {"name": "transform", "command": "python transform.py", "dependencies": ["extract"]},
+      {"name": "load",      "command": "python load.py",      "dependencies": ["transform"]}
+    ]
+  }'
+```
+
+### Trigger a run
+
+```bash
+curl -X POST http://localhost:8000/dags/{dag_id}/run
+```
+
+### Check status
+
+```bash
+curl http://localhost:8000/dags/{dag_id}/status
+```
+
+## Running Tests
+
+```bash
+pytest tests/ -v
+```
 
 ## Author
 
 **Donell** -- Computer Science student at Aston University, Birmingham.
+System QA Engineer Intern at Graphcore.
