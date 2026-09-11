@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 # ---------------------------------------------------------------------------
 # This import must happen before target_metadata is set.
 # Alembic inspects Base.metadata to know what tables should exist.
+from dag_engine.core.config import settings
 from dag_engine.db.base import Base
 from dag_engine.db import models  # noqa: F401 -- registers models on Base.metadata
 
@@ -24,6 +25,11 @@ from dag_engine.db import models  # noqa: F401 -- registers models on Base.metad
 # Alembic Config
 # ---------------------------------------------------------------------------
 config = context.config
+
+# Dynamically override the database URL using application settings.
+# This prevents Alembic from falling back to hardcoded localhost:5432 in alembic.ini
+# when running inside Docker containers or different deployment environments.
+config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
 
 # Interpret the config file for Python logging
 if config.config_file_name is not None:
