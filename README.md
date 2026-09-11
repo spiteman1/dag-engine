@@ -1,10 +1,10 @@
 # DAG Engine
 
-> **Status: Active Development -- v0.1.0 Foundation**
+> **Status: Active Development (Phase A Complete)**
 
-A custom Directed Acyclic Graph (DAG) task execution engine built from scratch in Python. Conceptually similar to a lightweight Apache Airflow -- DAG definitions are submitted via a REST API, dependencies are resolved using graph algorithms, and workloads are distributed across multiple asynchronous workers via a Redis message broker.
+A custom Directed Acyclic Graph (DAG) task execution engine built from scratch in Python. Conceptually similar to a lightweight Apache Airflow: DAG definitions are submitted via a REST API, dependencies are resolved using graph algorithms, and workloads are distributed across multiple asynchronous workers via a Redis message broker.
 
-**This is a learning-driven systems engineering project. Every component is written from scratch to deeply understand how distributed task orchestration works at a fundamental level. The foundation is complete and functional, but this is explicitly a v0.1 -- significant work remains before this would be considered production-grade.**
+**This is a learning-driven systems engineering project. Every component is written from scratch to deeply understand how distributed task orchestration works at a fundamental level. Phase A (critical runtime and ordering fixes) is complete, with Phase B (concurrency locking) underway.**
 
 ---
 
@@ -48,7 +48,7 @@ A custom Directed Acyclic Graph (DAG) task execution engine built from scratch i
 | Message Broker   | Redis 7                       |
 | Workers          | Custom Python AsyncIO         |
 | Validation       | Pydantic v2                   |
-| Testing          | pytest                        |
+| Testing          | pytest & pytest-asyncio       |
 | Containerisation | Docker & Docker Compose       |
 
 ---
@@ -78,56 +78,62 @@ A custom Directed Acyclic Graph (DAG) task execution engine built from scratch i
 │   └── test_graph.py          # Unit tests for graph algorithms
 ├── .env.example               # Environment variable template
 ├── docker-compose.yml         # PostgreSQL 15 + Redis 7 services
-└── requirements.txt           # Pinned dependencies
+├── pyproject.toml             # Project packaging, dependencies, and pytest configuration
+└── requirements.txt           # Thin wrapper pointing to pyproject.toml
 ```
 
 ---
 
-## Build Phases
+## Master Implementation Phases
 
-✅ **Phase 1** -- Project Initialisation & Architecture (scaffolding, Docker Compose)
-✅ **Phase 2** -- The State Machine (database schema & SQLAlchemy async models)
-✅ **Phase 3** -- The Brain (graph algorithms: cycle detection & topological sort)
-✅ **Phase 4** -- The Command Tent (FastAPI REST endpoints)
-✅ **Phase 5** -- The Frontline Troops (distributed async workers)
+- [x] **Phase A: Core Reliability & Runtime Fixes**
+  - Project packaging and pytest-asyncio integration (`pyproject.toml`)
+  - Cross-platform Windows signal handling with graceful shutdown
+  - Transaction ordering fix (PostgreSQL commit before Redis `lpush`)
+  - Dynamic Alembic database URL injection from application settings
+  - Single-pass in-degree and dependency parsing for topological sort
+- [ ] **Phase B: Concurrency Safety** (Row-level locks via `SELECT ... FOR UPDATE SKIP LOCKED`)
+- [ ] **Phase C: Fault Recovery & Heartbeats** (Worker heartbeats, zombie reaper process, retries)
+- [ ] **Phase D: Production Hardening & Full API** (DagRun entity, CRUD endpoints, subprocess execution)
+- [ ] **Phase E: Benchmarking & Load Testing** (Locust test suite, high concurrency validation)
 
 ---
 
-## What's Working (v0.1 Foundation)
+## What's Working (v0.1 Foundation + Phase A Fixes)
 
-- **DAG Submission via REST API** -- Define DAGs and tasks through JSON payloads
-- **Cycle Detection** -- DFS-based validation rejects invalid DAGs before they touch the database
-- **Topological Sort** -- Kahn's Algorithm resolves execution order grouped into parallel tiers
-- **Distributed Workers** -- Multiple async worker instances pull tasks from Redis concurrently via BRPOP
-- **Dependency Fanout** -- Workers automatically enqueue downstream tasks once all parent tasks succeed
-- **Real-Time Status** -- Query the execution state of a DAG and all its tasks at any point
-- **Database Migrations** -- Alembic with async SQLAlchemy support, initial schema in place
-- **Interactive API Docs** -- Auto-generated Swagger UI at `/docs`
+- **DAG Submission via REST API**: Define DAGs and tasks through JSON payloads
+- **Cycle Detection**: DFS-based validation rejects invalid DAGs before they touch the database
+- **Topological Sort**: Kahn's Algorithm resolves execution order grouped into parallel tiers
+- **Distributed Workers**: Multiple async worker instances pull tasks from Redis concurrently via BRPOP
+- **Dependency Fanout**: Workers automatically enqueue downstream tasks once all parent tasks succeed
+- **Real-Time Status**: Query the execution state of a DAG and all its tasks at any point
+- **Database Migrations**: Alembic with dynamic settings and async SQLAlchemy support
+- **Interactive API Docs**: Auto-generated Swagger UI at `/docs`
 
 ---
 
 ## Roadmap
 
-> Everything below represents the gap between the current v0.1 foundation and a truly complete, production-grade system.
+> Everything below represents the gap between the current foundation and a truly complete, production-grade system.
 
-### 🔴 Critical -- Must Fix
-
-| Item | Description |
-|------|-------------|
-| **FAILED task state** | Workers do not mark tasks `FAILED` when an exception occurs. A crashed task hangs in `RUNNING` indefinitely. |
-| **FAILED fanout propagation** | If a parent task fails, all downstream dependents must be marked `FAILED` automatically, not left in `PENDING`. |
-| **`GET /dags` endpoint** | No endpoint to list all DAG definitions -- a basic omission. |
-| **Per-run status filtering** | `GET /dags/{id}/status` returns all historical runs. Needs filtering by `dag_run_id` to inspect a specific execution. |
-
-### 🟡 Important -- Should Do
+### 🔴 Critical (In Progress / Next)
 
 | Item | Description |
 |------|-------------|
-| **API integration tests** | No tests for the REST layer. Need `httpx`-based tests for all three endpoints covering happy path and error cases. |
-| **`pytest.ini` / `pyproject.toml`** | pytest-asyncio mode is not configured -- async tests may silently not execute correctly. |
-| **Real command execution** | Workers simulate tasks with `asyncio.sleep()`. Real shell execution via `asyncio.subprocess` is the actual goal. |
-| **`GET /dags` list endpoint** | Ability to paginate and filter all stored DAG definitions. |
-| **DAG deletion endpoint** | `DELETE /dags/{dag_id}` with cascade cleanup of tasks and runs. |
+| **Pessimistic task claiming** | Prevent race conditions where two workers process the same queued task using `SELECT ... FOR UPDATE SKIP LOCKED`. |
+| **Atomic downstream fanout** | Prevent duplicate enqueueing when parallel parent tasks finish simultaneously. |
+| **FAILED task state** | Workers mark tasks `FAILED` on exception rather than hanging in `RUNNING`. |
+| **FAILED fanout propagation** | When a parent task fails, cascade failure or skip state to downstream dependents. |
+| **`DagRun` entity & run status** | Track runs via dedicated table with status filtering rather than loose UUIDs. |
+
+### 🟡 Important
+
+| Item | Description |
+|------|-------------|
+| **`GET /dags` list & CRUD** | List all DAG definitions with pagination, get single DAG, and delete DAG with cascade. |
+| **Real command execution** | Workers execute shell commands via `asyncio.subprocess` with stdout/stderr capture. |
+| **API integration tests** | Automated `httpx`-based tests for all REST endpoints covering happy path and error cases. |
+| **Connection pooling** | Shared Redis connection pool across FastAPI request lifespans. |
 
 ### 🟢 Production Hardening
 
@@ -195,7 +201,7 @@ docker compose up -d
 ### 3. Install dependencies
 
 ```bash
-pip install -r requirements.txt
+pip install -e ".[dev]"
 ```
 
 ### 4. Run database migrations
@@ -265,5 +271,5 @@ pytest tests/ -v
 
 ## Author
 
-**Donell** -- Computer Science student at Aston University, Birmingham.
+**Donell** - Computer Science student at Aston University, Birmingham.
 System QA Engineer Intern at Graphcore.
