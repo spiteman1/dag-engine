@@ -108,23 +108,23 @@ def topological_sort(tasks: list[dict]) -> list[list[str]]:
         4. Nodes whose in-degree drops to 0 join the next tier.
         5. Repeat until all nodes are processed.
     """
-    # Build adjacency list: task_name -> list of tasks that depend ON it
-    # (reverse direction from detect_cycles -- here we follow the flow)
+    # Build adjacency list (dependents) and calculate in-degree in a single pass.
+    # dependents: parent task -> list of downstream tasks waiting on it.
+    # in_degree: task name -> count of prerequisite dependencies.
     dependents: dict[str, list[str]] = defaultdict(list)
     in_degree: dict[str, int] = {}
 
-    # Initialise every task with in-degree 0
     for task in tasks:
-        in_degree[task["name"]] = 0
+        name = task["name"]
+        deps = task["dependencies"]
 
-    # Count incoming edges (how many dependencies each task has)
-    for task in tasks:
-        for dep in task["dependencies"]:
-            dependents[dep].append(task["name"])
-            in_degree[task["name"]] = in_degree.get(task["name"], 0) + 1
+        # Number of prerequisite tasks that must complete before this task can run
+        in_degree[name] = len(deps)
 
-    # Recalculate properly
-    in_degree = {task["name"]: len(task["dependencies"]) for task in tasks}
+  
+        # Map each prerequisite to this downstream task
+        for dep in deps:
+            dependents[dep].append(name)
 
     # Tier 0: all tasks with no dependencies (in-degree 0)
     queue: deque[str] = deque(
