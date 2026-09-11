@@ -1,0 +1,88 @@
+# =============================================================================
+# pyproject.toml -- Project identity and build configuration
+#
+# This file replaces the old setup.py + setup.cfg + requirements.txt pattern.
+# PEP 621 standardised this format in 2021 -- it's the modern way to define
+# a Python project's metadata, dependencies, and tool configuration.
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Build System
+# ---------------------------------------------------------------------------
+# Tells pip (and other build frontends) which build backend to use.
+# setuptools is the default and most widely supported. You'll also see
+# "hatchling", "flit_core", and "poetry-core" in the wild -- they all
+# read this same [project] table but have different features.
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+# ---------------------------------------------------------------------------
+# Project Metadata
+# ---------------------------------------------------------------------------
+[project]
+name = "dag-engine"
+version = "0.1.0"
+description = "A lightweight distributed DAG task execution engine"
+requires-python = ">=3.11"
+# We use 3.11+ because:
+#   - TaskGroup (asyncio) landed in 3.11
+#   - str | None union syntax (PEP 604) is stable from 3.10+
+#   - match/case (structural pattern matching) from 3.10+
+# The codebase already uses `str | None` in type hints, so 3.11 is the floor.
+
+# Runtime dependencies -- these are installed when someone does `pip install .`
+# Equivalent to what was in requirements.txt, but structured and versioned.
+dependencies = [
+    "fastapi==0.115.0",
+    "uvicorn[standard]==0.32.0",
+    "sqlalchemy[asyncio]==2.0.36",
+    "asyncpg==0.31.0",
+    "alembic==1.14.0",
+    "redis==5.2.1",
+    "pydantic-settings==2.6.1",
+]
+
+# Optional dependency groups -- installed with `pip install -e ".[dev]"`
+# Keeps test/dev tools out of production images (smaller Docker layers).
+[project.optional-dependencies]
+dev = [
+    "pytest==8.3.4",
+    "pytest-asyncio==0.24.0",
+    "httpx==0.28.1",
+]
+
+# ---------------------------------------------------------------------------
+# Setuptools: Package Discovery
+# ---------------------------------------------------------------------------
+# Tells setuptools which directories contain importable Python packages.
+# find = {} means "auto-discover" -- it scans for directories with __init__.py.
+# This is why dag_engine/__init__.py exists -- without it, setuptools wouldn't
+# recognise dag_engine as a package.
+[tool.setuptools.packages.find]
+include = ["dag_engine*"]
+# The wildcard "dag_engine*" matches dag_engine, dag_engine.api,
+# dag_engine.core, dag_engine.db, dag_engine.worker -- all subpackages.
+
+# ---------------------------------------------------------------------------
+# Pytest Configuration
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+# pythonpath tells pytest to add these directories to sys.path before
+# running tests. Without this, `from dag_engine.core.graph import ...`
+# fails with ModuleNotFoundError inside test files.
+pythonpath = ["."]
+
+# asyncio_mode = "auto" means pytest-asyncio automatically treats any
+# `async def test_...` function as an async test. Without this, you'd
+# need to decorate every single async test with @pytest.mark.asyncio.
+asyncio_mode = "auto"
+
+# Sets the default event loop scope for async fixtures. "function" means
+# each test function gets its own fresh event loop -- safest default,
+# prevents tests from leaking state into each other.
+asyncio_default_fixture_loop_scope = "function"
+
+# Only look for tests in the tests/ directory (avoids accidentally
+# collecting test-like files from alembic/ or other places).
+testpaths = ["tests"]

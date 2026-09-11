@@ -1,37 +1,15 @@
 # ======================
-# Runtime Dependencies
+# Requirements (thin wrapper)
 # ======================
-
-# Web framework - ASGI-based, auto-generates OpenAPI docs
-fastapi==0.115.0
-
-# ASGI server - runs the FastAPI app, [standard] adds uvloop + httptools
-uvicorn[standard]==0.32.0
-
-# ORM - maps Python classes to database tables, [asyncio] enables async support
-sqlalchemy[asyncio]==2.0.36
-
-# PostgreSQL async driver - the wire protocol layer SQLAlchemy talks through
-asyncpg==0.30.0
-
-# Database migrations - version-controlled schema changes (like Flyway for Python)
-alembic==1.14.0
-
-# Redis client - async support for task queue polling via redis.asyncio
-redis==5.2.1
-
-# Config management - loads settings from environment variables and .env files
-pydantic-settings==2.6.1
-
-# ======================
-# Dev / Test Dependencies
-# ======================
-
-# Test runner
-pytest==8.3.4
-
-# Async test support - lets pytest run async test functions
-pytest-asyncio==0.24.0
-
-# Async HTTP client - used by FastAPI's test client under the hood
-httpx==0.28.1
+# All dependencies are now defined in pyproject.toml.
+# This file exists for backwards compatibility with tools and CI systems
+# that expect a requirements.txt to exist.
+#
+# Usage:
+#   pip install -e ".[dev]"    <-- installs runtime + dev/test dependencies
+#   pip install -e .           <-- installs runtime dependencies only
+#
+# If you must use this file directly:
+#   pip install -r requirements.txt
+#
+-e ".[dev]"
