@@ -188,11 +188,24 @@ async def run_dag(
     for task_name in root_task_names:
         run = task_runs[task_name]
         run.status = TaskRunStatus.QUEUED
-        # Push the TaskRun ID to Redis so a worker can claim it
-        await redis.lpush(settings.TASK_QUEUE_NAME, str(run.id))
         queued_task_names.append(task_name)
 
+    # CRITICAL: commit BEFORE publishing to Redis.
+    #
+    # If we push to Redis first, a fast worker can pop the task ID and
+    # query Postgres before the row is committed. The worker gets None,
+    # logs "TaskRun not found", and permanently drops the task.
+    #
+    # By committing first, we guarantee the row exists in Postgres
+    # before any worker can see the task ID in the Redis queue.
     await db.commit()
+
+    # Now that the rows are safely committed, publish to Redis.
+    # Even if the API crashes between commit and lpush, the tasks
+    # will just sit in QUEUED state -- recoverable by a reaper process.
+    for task_name in queued_task_names:
+        run = task_runs[task_name]
+        await redis.lpush(settings.TASK_QUEUE_NAME, str(run.id))
 
     return DagRunTriggerResponse(
         dag_run_id=dag_run_id,
