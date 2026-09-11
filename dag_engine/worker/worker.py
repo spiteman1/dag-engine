@@ -17,6 +17,7 @@ Each instance:
 import asyncio
 import logging
 import signal
+import sys
 import uuid
 from datetime import datetime, timezone
 
@@ -64,9 +65,15 @@ class Worker:
         )
 
         # Graceful shutdown on SIGINT (Ctrl+C) and SIGTERM (Docker stop)
-        loop = asyncio.get_running_loop()
-        for sig in (signal.SIGINT, signal.SIGTERM):
-            loop.add_signal_handler(sig, self._handle_shutdown)
+        #
+        # loop.add_signal_handler() is a Unix-only API. On Windows, the
+        # ProactorEventLoop raises NotImplementedError. We skip it there
+        # and instead catch KeyboardInterrupt in _run_loop() below.
+        # This is the same pattern uvicorn uses internally.
+        if sys.platform != "win32":
+            loop = asyncio.get_running_loop()
+            for sig in (signal.SIGINT, signal.SIGTERM):
+                loop.add_signal_handler(sig, self._handle_shutdown)
 
         logger.info(f"Worker '{self.worker_id}' connected. Listening for tasks...")
         await self._run_loop()
@@ -96,6 +103,14 @@ class Worker:
 
                 logger.info(f"Claimed task run: {task_run_id}")
                 await self._process_task(task_run_id)
+
+            except KeyboardInterrupt:
+                # Windows fallback: Ctrl+C raises KeyboardInterrupt directly
+                # since we can't use add_signal_handler on ProactorEventLoop.
+                # On Unix this path is never hit because SIGINT is caught
+                # by the signal handler which sets self.running = False.
+                logger.info(f"Worker '{self.worker_id}' received KeyboardInterrupt. Shutting down...")
+                self.running = False
 
             except Exception as exc:
                 logger.error(f"Unexpected error in worker loop: {exc}", exc_info=True)
