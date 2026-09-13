@@ -127,11 +127,20 @@ class Worker:
         """
         async with AsyncSessionLocal() as db:
             # ----------------------------------------------------------------
-            # Step 1: Load the TaskRun with its TaskDefinition
+            # Step 1: Atomically claim the TaskRun with a pessimistic lock
             # ----------------------------------------------------------------
+            # We filter strictly on status=QUEUED and acquire a row-level lock.
+            # with_for_update(skip_locked=True) tells PostgreSQL:
+            #   1. Lock this specific row so no concurrent worker can touch it.
+            #   2. If another transaction holds the lock, skip it and return None
+            #      rather than hanging the worker's event loop.
             result = await db.execute(
                 select(TaskRun)
-                .where(TaskRun.id == task_run_id)
+                .where(
+                    TaskRun.id == task_run_id,
+                    TaskRun.status == TaskRunStatus.QUEUED,
+                )
+                .with_for_update(skip_locked=True)
                 .options(
                     selectinload(TaskRun.task).selectinload(TaskDefinition.dag)
                 )
@@ -139,7 +148,9 @@ class Worker:
             task_run = result.scalar_one_or_none()
 
             if not task_run:
-                logger.warning(f"TaskRun {task_run_id} not found in database. Skipping.")
+                logger.info(
+                    f"TaskRun {task_run_id} is not in QUEUED state or locked by another worker. Skipping."
+                )
                 return
 
             task_def = task_run.task
