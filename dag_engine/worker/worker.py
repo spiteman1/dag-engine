@@ -221,18 +221,23 @@ class Worker:
         ]
 
         for dependent in dependent_tasks:
-            # Get the TaskRun for this dependent task in this specific dag_run
+            # Atomically lock the dependent TaskRun row while in PENDING state.
+            # If two workers finish parent tasks simultaneously, the second worker
+            # waits for this lock. Once released, the second worker sees the updated
+            # QUEUED status and skips, preventing double-enqueue to Redis.
             dep_run_result = await db.execute(
                 select(TaskRun)
                 .where(
                     TaskRun.task_id == dependent.id,
                     TaskRun.dag_run_id == dag_run_id,
+                    TaskRun.status == TaskRunStatus.PENDING,
                 )
+                .with_for_update()
             )
             dep_run = dep_run_result.scalar_one_or_none()
 
-            if not dep_run or dep_run.status != TaskRunStatus.PENDING:
-                continue  # Already queued or running -- skip
+            if not dep_run:
+                continue  # Already queued or claimed by another worker
 
             # Check if ALL parent tasks for this dependent are SUCCESS
             parent_names = dependent.dependencies
