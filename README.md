@@ -92,20 +92,25 @@ A custom Directed Acyclic Graph (DAG) task execution engine built from scratch i
   - Transaction ordering fix (PostgreSQL commit before Redis `lpush`)
   - Dynamic Alembic database URL injection from application settings
   - Single-pass in-degree and dependency parsing for topological sort
-- [ ] **Phase B: Concurrency Safety** (Row-level locks via `SELECT ... FOR UPDATE SKIP LOCKED`)
+- [ ] **Phase B: Concurrency Safety (In Progress)**
+  - [x] Atomic task claiming using row-level pessimistic locks (`SELECT ... FOR UPDATE SKIP LOCKED`)
+  - [x] Atomic downstream fanout with serialized row locks (`SELECT ... FOR UPDATE`)
+  - [ ] Unique constraint on task names within a DAG
+  - [ ] Graph algorithm dependency name validation
 - [ ] **Phase C: Fault Recovery & Heartbeats** (Worker heartbeats, zombie reaper process, retries)
 - [ ] **Phase D: Production Hardening & Full API** (DagRun entity, CRUD endpoints, subprocess execution)
 - [ ] **Phase E: Benchmarking & Load Testing** (Locust test suite, high concurrency validation)
 
 ---
 
-## What's Working (v0.1 Foundation + Phase A Fixes)
+## What's Working (v0.1 Foundation + Phase A & B Progress)
 
 - **DAG Submission via REST API**: Define DAGs and tasks through JSON payloads
 - **Cycle Detection**: DFS-based validation rejects invalid DAGs before they touch the database
 - **Topological Sort**: Kahn's Algorithm resolves execution order grouped into parallel tiers
 - **Distributed Workers**: Multiple async worker instances pull tasks from Redis concurrently via BRPOP
-- **Dependency Fanout**: Workers automatically enqueue downstream tasks once all parent tasks succeed
+- **Atomic Task Claiming**: PostgreSQL row-level pessimistic locks (`FOR UPDATE SKIP LOCKED`) prevent duplicate execution across worker nodes
+- **Atomic Dependency Fanout**: Serialized row-level locks on downstream tasks prevent duplicate enqueueing to Redis during parallel task completion
 - **Real-Time Status**: Query the execution state of a DAG and all its tasks at any point
 - **Database Migrations**: Alembic with dynamic settings and async SQLAlchemy support
 - **Interactive API Docs**: Auto-generated Swagger UI at `/docs`
@@ -118,13 +123,14 @@ A custom Directed Acyclic Graph (DAG) task execution engine built from scratch i
 
 ### 🔴 Critical (In Progress / Next)
 
-| Item | Description |
-|------|-------------|
-| **Pessimistic task claiming** | Prevent race conditions where two workers process the same queued task using `SELECT ... FOR UPDATE SKIP LOCKED`. |
-| **Atomic downstream fanout** | Prevent duplicate enqueueing when parallel parent tasks finish simultaneously. |
-| **FAILED task state** | Workers mark tasks `FAILED` on exception rather than hanging in `RUNNING`. |
-| **FAILED fanout propagation** | When a parent task fails, cascade failure or skip state to downstream dependents. |
-| **`DagRun` entity & run status** | Track runs via dedicated table with status filtering rather than loose UUIDs. |
+| Item | Status | Description |
+|------|--------|-------------|
+| **Pessimistic task claiming** | Done | Row-level locking via `SELECT ... FOR UPDATE SKIP LOCKED` prevents race conditions between workers. |
+| **Atomic downstream fanout** | Done | Serialized row-level locks prevent duplicate enqueues during diamond dependency completions. |
+| **Unique task name constraint** | Up Next | Compound unique constraint on `(dag_id, name)` to prevent ambiguous dependency resolution. |
+| **FAILED task state** | Pending | Workers mark tasks `FAILED` on exception rather than hanging in `RUNNING`. |
+| **FAILED fanout propagation** | Pending | When a parent task fails, cascade failure or skip state to downstream dependents. |
+| **`DagRun` entity & run status** | Pending | Track runs via dedicated table with status filtering rather than loose UUIDs. |
 
 ### 🟡 Important
 
@@ -142,7 +148,7 @@ A custom Directed Acyclic Graph (DAG) task execution engine built from scratch i
 | **Authentication** | API has no auth layer. JWT-based authentication should protect all endpoints. |
 | **Rate limiting** | No request throttling on the API. Required before any public deployment. |
 | **Structured logging** | Replace `print`/basic logging with structured JSON logs (e.g. using `structlog`). |
-| **Metrics & observability** | Instrument with Prometheus metrics -- queue depth, task duration, success/failure rates. |
+| **Metrics & observability** | Instrument with Prometheus metrics: queue depth, task duration, success/failure rates. |
 | **Worker retry logic** | Failed tasks should be retried N times with exponential backoff before being marked permanently `FAILED`. |
 | **Idempotent task claiming** | Add a database-level lock when a worker claims a task to prevent two workers processing the same task under high load. |
 
