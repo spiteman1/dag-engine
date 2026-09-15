@@ -169,29 +169,46 @@ class Worker:
             )
 
             # ----------------------------------------------------------------
-            # Step 3: Simulate execution
+            # Steps 3-5: Execute, then handle SUCCESS or FAILED
             # ----------------------------------------------------------------
-            # In a real system, this would shell out to run task_def.command.
-            # We simulate with a variable sleep to mimic different workloads.
-            import random
-            execution_time = random.uniform(1.0, 3.0)
-            await asyncio.sleep(execution_time)
+            # The try/except here is load-bearing. If the execution raises
+            # and we let the exception propagate uncaught, the async with
+            # block rolls back the database session. The task stays stuck
+            # in RUNNING forever with no error record -- a silent zombie.
+            #
+            # By catching the exception here we can commit the FAILED state
+            # explicitly before the session closes, making failure durable.
+            try:
+                # In a real system, this would shell out to run task_def.command.
+                # We simulate with a variable sleep to mimic different workloads.
+                import random
+                execution_time = random.uniform(1.0, 3.0)
+                await asyncio.sleep(execution_time)
 
-            # ----------------------------------------------------------------
-            # Step 4: Mark as SUCCESS
-            # ----------------------------------------------------------------
-            task_run.status = TaskRunStatus.SUCCESS
-            task_run.finished_at = datetime.now(timezone.utc)
-            await db.commit()
+                # Mark as SUCCESS
+                task_run.status = TaskRunStatus.SUCCESS
+                task_run.finished_at = datetime.now(timezone.utc)
+                await db.commit()
 
-            logger.info(
-                f"Task '{task_def.name}' completed in {execution_time:.2f}s"
-            )
+                logger.info(
+                    f"Task '{task_def.name}' completed successfully "
+                    f"in {execution_time:.2f}s"
+                )
 
-            # ----------------------------------------------------------------
-            # Step 5: Orchestration fanout -- check downstream dependents
-            # ----------------------------------------------------------------
-            await self._enqueue_ready_dependents(db, task_def, task_run.dag_run_id)
+                # Orchestration fanout: check if any downstream tasks are now ready
+                await self._enqueue_ready_dependents(db, task_def, task_run.dag_run_id)
+
+            except Exception as exc:
+                # Execution failed. Commit the FAILED state so the task does
+                # not stay stuck in RUNNING. Without this explicit commit, a
+                # rollback would leave the task as a zombie in RUNNING forever.
+                logger.error(
+                    f"Task '{task_def.name}' (run_id={task_run.id}) failed: {exc}",
+                    exc_info=True,
+                )
+                task_run.status = TaskRunStatus.FAILED
+                task_run.finished_at = datetime.now(timezone.utc)
+                await db.commit()
 
     async def _enqueue_ready_dependents(
         self,
