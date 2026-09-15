@@ -1,10 +1,10 @@
 # DAG Engine
 
-> **Status: Active Development (Phase A Complete)**
+> **Status: Active Development (Phase A & B Complete, Phase C Underway)**
 
 A custom Directed Acyclic Graph (DAG) task execution engine built from scratch in Python. Conceptually similar to a lightweight Apache Airflow: DAG definitions are submitted via a REST API, dependencies are resolved using graph algorithms, and workloads are distributed across multiple asynchronous workers via a Redis message broker.
 
-**This is a learning-driven systems engineering project. Every component is written from scratch to deeply understand how distributed task orchestration works at a fundamental level. Phase A (critical runtime and ordering fixes) is complete, with Phase B (concurrency locking) underway.**
+**This is a learning-driven systems engineering project. Every component is written from scratch to deeply understand how distributed task orchestration works at a fundamental level. Phase A (critical runtime and ordering fixes) and Phase B (concurrency safety and data integrity) are complete, with Phase C (fault recovery, DagRun entity, and worker heartbeats) actively underway.**
 
 ---
 
@@ -23,7 +23,7 @@ A custom Directed Acyclic Graph (DAG) task execution engine built from scratch i
         │  Graph   │  │PostgreSQL│  │    Redis      │
         │  Engine  │  │  (State) │  │ (Task Queue)  │
         │ Topo Sort│  │SQLAlchemy│  │    BRPOP      │
-        │ DFS Cycle│  │  Async   │  │               │
+        │ DFS Cycle│  │  Async   │  │  Heartbeats   │
         └──────────┘  └──────────┘  └───────┬───────┘
                                             │
                               ┌─────────────┼─────────────┐
@@ -68,12 +68,13 @@ A custom Directed Acyclic Graph (DAG) task execution engine built from scratch i
 │   │   └── graph.py           # DFS cycle detection + Kahn's topological sort
 │   ├── db/
 │   │   ├── base.py            # Async engine, session factory, Base class
-│   │   └── models.py          # DagDefinition, TaskDefinition, TaskRun ORM models
+│   │   └── models.py          # DagDefinition, DagRun, TaskDefinition, TaskRun models
 │   └── worker/
-│       └── worker.py          # Standalone async worker with Redis BRPOP + fanout
+│       └── worker.py          # Standalone async worker with Redis BRPOP + fanout + heartbeats
 ├── alembic/                   # Database migrations
 │   └── versions/
-│       └── 001_initial_schema.py
+│       ├── 001_initial_schema.py
+│       └── 002_add_dagrun_and_error_columns.py
 ├── tests/
 │   └── test_graph.py          # Unit tests for graph algorithms
 ├── .env.example               # Environment variable template
@@ -92,25 +93,36 @@ A custom Directed Acyclic Graph (DAG) task execution engine built from scratch i
   - Transaction ordering fix (PostgreSQL commit before Redis `lpush`)
   - Dynamic Alembic database URL injection from application settings
   - Single-pass in-degree and dependency parsing for topological sort
-- [ ] **Phase B: Concurrency Safety (In Progress)**
+- [x] **Phase B: Concurrency Safety & Data Integrity**
   - [x] Atomic task claiming using row-level pessimistic locks (`SELECT ... FOR UPDATE SKIP LOCKED`)
   - [x] Atomic downstream fanout with serialized row locks (`SELECT ... FOR UPDATE`)
-  - [ ] Unique constraint on task names within a DAG
-  - [ ] Graph algorithm dependency name validation
-- [ ] **Phase C: Fault Recovery & Heartbeats** (Worker heartbeats, zombie reaper process, retries)
-- [ ] **Phase D: Production Hardening & Full API** (DagRun entity, CRUD endpoints, subprocess execution)
+  - [x] Compound unique constraint on `(dag_id, name)` to prevent ambiguous runtime task matching
+  - [x] Graph algorithm dependency name validation to reject dangling references and typos at submission
+- [ ] **Phase C: Fault Recovery & Lifecycle Management (In Progress)**
+  - [x] Try/except execution wrapping with durable `FAILED` state persistence
+  - [x] Breadth-first search (BFS) failure cascade across downstream dependent tasks
+  - [x] `DagRun` database entity + `error_message` column + Alembic migration 002
+  - [x] Worker heartbeat loop with configurable interval and TTL via Redis `SETEX`
+  - [ ] Standalone Reaper process for zombie task detection and cleanup (`reaper.py`)
+  - [ ] Worker retry logic with exponential backoff
+- [ ] **Phase D: Production Hardening & Full API** (CRUD endpoints, subprocess execution, lifespan pools)
 - [ ] **Phase E: Benchmarking & Load Testing** (Locust test suite, high concurrency validation)
 
 ---
 
-## What's Working (v0.1 Foundation + Phase A & B Progress)
+## What's Working (v0.1 Foundation + Phase A, B, & C Progress)
 
 - **DAG Submission via REST API**: Define DAGs and tasks through JSON payloads
-- **Cycle Detection**: DFS-based validation rejects invalid DAGs before they touch the database
+- **Dangling Dependency Validation**: Rejects invalid DAGs referencing non-existent task names at submission
+- **Cycle Detection**: DFS-based validation rejects circular dependencies before touching the database
 - **Topological Sort**: Kahn's Algorithm resolves execution order grouped into parallel tiers
 - **Distributed Workers**: Multiple async worker instances pull tasks from Redis concurrently via BRPOP
 - **Atomic Task Claiming**: PostgreSQL row-level pessimistic locks (`FOR UPDATE SKIP LOCKED`) prevent duplicate execution across worker nodes
-- **Atomic Dependency Fanout**: Serialized row-level locks on downstream tasks prevent duplicate enqueueing to Redis during parallel task completion
+- **Atomic Dependency Fanout**: Serialized row-level locks prevent duplicate enqueues during diamond dependency completions
+- **Failure Resilience**: Durable `FAILED` status commits prevent tasks from getting stuck in `RUNNING` on exception
+- **BFS Downstream Failure Cascade**: When a parent task fails, all reachable downstream dependents transition to `FAILED`
+- **First-Class DagRun Entity**: Dedicated table tracks run-level status, start/finish times, and failure diagnostics
+- **Worker Heartbeats**: Background async tasks refresh expiring liveness keys in Redis with clean shutdown cleanup
 - **Real-Time Status**: Query the execution state of a DAG and all its tasks at any point
 - **Database Migrations**: Alembic with dynamic settings and async SQLAlchemy support
 - **Interactive API Docs**: Auto-generated Swagger UI at `/docs`
@@ -121,16 +133,20 @@ A custom Directed Acyclic Graph (DAG) task execution engine built from scratch i
 
 > Everything below represents the gap between the current foundation and a truly complete, production-grade system.
 
-### 🔴 Critical (In Progress / Next)
+### 🔴 Critical (In Progress / Up Next)
 
 | Item | Status | Description |
 |------|--------|-------------|
 | **Pessimistic task claiming** | Done | Row-level locking via `SELECT ... FOR UPDATE SKIP LOCKED` prevents race conditions between workers. |
 | **Atomic downstream fanout** | Done | Serialized row-level locks prevent duplicate enqueues during diamond dependency completions. |
-| **Unique task name constraint** | Up Next | Compound unique constraint on `(dag_id, name)` to prevent ambiguous dependency resolution. |
-| **FAILED task state** | Pending | Workers mark tasks `FAILED` on exception rather than hanging in `RUNNING`. |
-| **FAILED fanout propagation** | Pending | When a parent task fails, cascade failure or skip state to downstream dependents. |
-| **`DagRun` entity & run status** | Pending | Track runs via dedicated table with status filtering rather than loose UUIDs. |
+| **Unique task name constraint** | Done | Compound unique constraint on `(dag_id, name)` prevents ambiguous dependency resolution. |
+| **Dependency name validation** | Done | Validates dependency references exist in DAG definition before persisting. |
+| **FAILED task state** | Done | Workers catch exceptions and commit durable `FAILED` states to prevent zombie runs. |
+| **BFS failure cascade** | Done | Downstream dependents transition to `FAILED` automatically when a parent fails. |
+| **`DagRun` entity & run status** | Done | Dedicated model and migration tracking run lifecycle and task error messages. |
+| **Worker heartbeat loop** | Done | Periodic Redis `SETEX` pings signal worker health with automatic TTL expiration. |
+| **Zombie Reaper process** | Up Next | Standalone script recovering stalled tasks when worker heartbeats expire. |
+| **Worker retry logic** | Up Next | Exponential backoff for transient task execution failures. |
 
 ### 🟡 Important
 
