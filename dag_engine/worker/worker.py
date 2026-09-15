@@ -76,12 +76,60 @@ class Worker:
                 loop.add_signal_handler(sig, self._handle_shutdown)
 
         logger.info(f"Worker '{self.worker_id}' connected. Listening for tasks...")
-        await self._run_loop()
+        
+        # Launch heartbeat in the background alongside task execution
+        heartbeat_task = asyncio.create_task(self._heartbeat_loop())
+        try:
+            await self._run_loop()
+        finally:
+            # When the run loop exits (shutdown signal or KeyboardInterrupt),
+            # cleanly cancel the background heartbeat and remove the Redis key.
+            heartbeat_task.cancel()
+            await asyncio.gather(heartbeat_task, return_exceptions=True)
+            if self.redis:
+                try:
+                    await self.redis.delete(f"worker:heartbeat:{self.worker_id}")
+                except Exception:
+                    pass
+                await self.redis.aclose()
 
     def _handle_shutdown(self):
         """Called on SIGINT/SIGTERM -- sets the stop flag."""
         logger.info(f"Worker '{self.worker_id}' received shutdown signal. Finishing current task...")
         self.running = False
+
+    async def _heartbeat_loop(self):
+        """
+        Periodically writes an expiring liveness key to Redis.
+        
+        Key: worker:heartbeat:<worker_id>
+        TTL: settings.WORKER_HEARTBEAT_TTL
+        Interval: settings.WORKER_HEARTBEAT_INTERVAL
+        
+        If this worker crashes or gets killed abruptly, Redis expires
+        the key automatically, letting the Reaper detect the failure.
+        """
+        heartbeat_key = f"worker:heartbeat:{self.worker_id}"
+        logger.info(f"Worker '{self.worker_id}' heartbeat loop started.")
+
+        while self.running:
+            try:
+                now_iso = datetime.now(timezone.utc).isoformat()
+                # SETEX sets value and TTL atomically in Redis
+                await self.redis.setex(
+                    heartbeat_key,
+                    settings.WORKER_HEARTBEAT_TTL,
+                    now_iso,
+                )
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:
+                logger.warning(f"Worker '{self.worker_id}' failed to send heartbeat: {exc}")
+
+            try:
+                await asyncio.sleep(settings.WORKER_HEARTBEAT_INTERVAL)
+            except asyncio.CancelledError:
+                break
 
     async def _run_loop(self):
         """Continuously pops tasks from Redis and processes them."""
@@ -117,8 +165,6 @@ class Worker:
                 await asyncio.sleep(1)  # Brief back-off before retrying
 
         logger.info(f"Worker '{self.worker_id}' shut down cleanly.")
-        if self.redis:
-            await self.redis.aclose()
 
     async def _process_task(self, task_run_id: uuid.UUID):
         """

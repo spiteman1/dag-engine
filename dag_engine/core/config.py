@@ -58,6 +58,15 @@ class Settings(BaseSettings):
     # is empty. Gives the worker a natural loop point to check for
     # shutdown signals rather than blocking forever (timeout=0).
 
+    WORKER_HEARTBEAT_INTERVAL: int = 10
+    # Number of seconds between heartbeat pings sent by the worker to Redis.
+
+    WORKER_HEARTBEAT_TTL: int = 30
+    # Time-To-Live (in seconds) for the worker's heartbeat key in Redis.
+    # If a worker process abruptly dies (OOM, SIGKILL, hardware failure),
+    # Redis will automatically expire the key after this window, signaling
+    # to the Reaper that the worker is dead.
+
     class Config:
         # Tells pydantic-settings to look for a .env file in the
         # current working directory and load values from it.
