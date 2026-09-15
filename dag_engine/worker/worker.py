@@ -210,6 +210,11 @@ class Worker:
                 task_run.finished_at = datetime.now(timezone.utc)
                 await db.commit()
 
+                # Cascade FAILED to all downstream tasks still in PENDING.
+                # Without this, dependents sit in PENDING forever waiting for
+                # a parent that will never succeed -- a silent pipeline deadlock.
+                await self._fail_downstream_dependents(db, task_def, task_run.dag_run_id)
+
     async def _enqueue_ready_dependents(
         self,
         db,
@@ -282,6 +287,79 @@ class Worker:
                     f"Enqueued downstream task '{dependent.name}' "
                     f"(all {len(parent_tasks)} parent(s) succeeded)"
                 )
+
+
+    async def _fail_downstream_dependents(
+        self,
+        db,
+        failed_task: TaskDefinition,
+        dag_run_id: uuid.UUID,
+    ) -> None:
+        """
+        Cascade FAILED status to all downstream tasks that were waiting
+        on the failed task (and their own dependents, recursively).
+
+        Without this, a failed parent task leaves its children in PENDING
+        forever -- the worker never enqueues them because the parent never
+        succeeded, and no signal ever tells them to give up. The entire
+        downstream pipeline silently deadlocks.
+
+        This uses an iterative breadth-first traversal of the dependency
+        graph to mark every reachable PENDING descendant as FAILED.
+        """
+        # Load all task definitions in this DAG once, upfront.
+        # We need the full graph to resolve the dependency edges.
+        all_tasks_result = await db.execute(
+            select(TaskDefinition).where(TaskDefinition.dag_id == failed_task.dag_id)
+        )
+        all_tasks = all_tasks_result.scalars().all()
+
+        # Build a lookup: task_name -> TaskDefinition for fast resolution
+        task_by_name: dict[str, TaskDefinition] = {t.name: t for t in all_tasks}
+
+        # BFS queue starts with the direct dependents of the failed task
+        # (tasks that list the failed task's name in their dependencies)
+        queue: deque[str] = deque(
+            t.name for t in all_tasks if failed_task.name in t.dependencies
+        )
+
+        visited: set[str] = set()
+
+        while queue:
+            dep_name = queue.popleft()
+
+            # Avoid processing the same task twice in complex diamond graphs
+            if dep_name in visited:
+                continue
+            visited.add(dep_name)
+
+            dep_task = task_by_name.get(dep_name)
+            if not dep_task:
+                continue
+
+            # Load the TaskRun for this dependent task in this specific run
+            dep_run_result = await db.execute(
+                select(TaskRun).where(
+                    TaskRun.task_id == dep_task.id,
+                    TaskRun.dag_run_id == dag_run_id,
+                    TaskRun.status == TaskRunStatus.PENDING,
+                )
+            )
+            dep_run = dep_run_result.scalar_one_or_none()
+
+            if dep_run:
+                dep_run.status = TaskRunStatus.FAILED
+                dep_run.finished_at = datetime.now(timezone.utc)
+                await db.commit()
+                logger.warning(
+                    f"Cascaded FAILED to downstream task '{dep_name}' "
+                    f"because parent '{failed_task.name}' failed."
+                )
+
+            # Add this task's own dependents to the queue for the next wave
+            for next_dep in all_tasks:
+                if dep_name in next_dep.dependencies:
+                    queue.append(next_dep.name)
 
 
 # ---------------------------------------------------------------------------
