@@ -208,6 +208,7 @@ class Worker:
                 )
                 task_run.status = TaskRunStatus.FAILED
                 task_run.finished_at = datetime.now(timezone.utc)
+                task_run.error_message = str(exc)
                 await db.commit()
 
                 # Cascade FAILED to all downstream tasks still in PENDING.

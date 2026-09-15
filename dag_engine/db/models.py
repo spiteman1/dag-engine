@@ -1,7 +1,7 @@
 """
-db/models.py - SQLAlchemy ORM models for the three core database tables.
+db/models.py - SQLAlchemy ORM models for the four core database tables.
 
-Defines DagDefinition, TaskDefinition, and TaskRun as Python classes
+Defines DagDefinition, DagRun, TaskDefinition, and TaskRun as Python classes
 that map directly to PostgreSQL tables. Also defines the Enum types
 that enforce valid status values at the database level.
 """
@@ -33,6 +33,12 @@ from dag_engine.db.base import Base
 class DagStatus(str, Enum):
     ACTIVE = "ACTIVE"
     INACTIVE = "INACTIVE"
+
+
+class DagRunStatus(str, Enum):
+    RUNNING = "RUNNING"   # DAG is actively executing
+    SUCCESS = "SUCCESS"   # All tasks completed successfully
+    FAILED = "FAILED"     # At least one task failed
 
 
 class TaskRunStatus(str, Enum):
@@ -81,8 +87,70 @@ class DagDefinition(Base):
         # deletes all its task definitions. No orphaned rows left behind.
     )
 
+    # One DAG definition can have many execution run instances
+    runs: Mapped[list["DagRun"]] = relationship(
+        "DagRun",
+        back_populates="dag",
+        cascade="all, delete-orphan",
+    )
+
     def __repr__(self) -> str:
         return f"<DagDefinition id={self.id} name={self.name!r}>"
+
+
+# ---------------------------------------------------------------------------
+# DagRun
+# ---------------------------------------------------------------------------
+# Represents a single execution instance of a DagDefinition.
+# Every time POST /dags/{id}/run is called, one DagRun row is created.
+#
+# Previously, dag_run_id was just a bare UUID threaded through TaskRun rows
+# with no backing table. This model gives us a single authoritative row to:
+#   - Query the overall status of a pipeline execution
+#   - Record when the run started and finished
+#   - Understand run-level metadata without aggregating TaskRun rows
+class DagRun(Base):
+    __tablename__ = "dag_runs"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    dag_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("dag_definitions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    status: Mapped[DagRunStatus] = mapped_column(
+        String(20),
+        default=DagRunStatus.RUNNING,
+        nullable=False,
+        # Starts as RUNNING when triggered.
+        # Transitions to SUCCESS when all TaskRuns succeed, or
+        # FAILED when any TaskRun fails.
+    )
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    # Each DagRun belongs to one DagDefinition
+    dag: Mapped["DagDefinition"] = relationship(
+        "DagDefinition", back_populates="runs"
+    )
+
+    # Each DagRun has many TaskRun instances (one per task in the DAG)
+    task_runs: Mapped[list["TaskRun"]] = relationship(
+        "TaskRun",
+        back_populates="dag_run",
+        cascade="all, delete-orphan",
+    )
+
+    def __repr__(self) -> str:
+        return f"<DagRun id={self.id} status={self.status!r}>"
 
 
 # ---------------------------------------------------------------------------
@@ -160,10 +228,11 @@ class TaskRun(Base):
     )
     dag_run_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
+        ForeignKey("dag_runs.id", ondelete="CASCADE"),
         nullable=False,
-        # A UUID generated at DAG trigger time, shared by all TaskRuns
-        # in the same execution. Groups runs together without needing
-        # a separate DagRun table.
+        # Foreign key to the DagRun row that spawned this TaskRun.
+        # Every task in a single pipeline execution shares the same dag_run_id,
+        # linking them all back to one authoritative DagRun record.
     )
     status: Mapped[TaskRunStatus] = mapped_column(
         String(20),
@@ -182,10 +251,22 @@ class TaskRun(Base):
     finished_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    error_message: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        # Stores the exception message when a task fails.
+        # Persisting this in the database means the error survives log rotation
+        # and is visible directly in GET /dags/{id}/status API responses.
+    )
 
     # Many runs belong to one task definition
     task: Mapped["TaskDefinition"] = relationship(
         "TaskDefinition", back_populates="runs"
+    )
+
+    # Each TaskRun belongs to one DagRun execution instance
+    dag_run: Mapped["DagRun"] = relationship(
+        "DagRun", back_populates="task_runs"
     )
 
     def __repr__(self) -> str:
