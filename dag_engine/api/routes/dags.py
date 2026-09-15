@@ -24,7 +24,7 @@ from dag_engine.api.schemas import (
     TaskRunResponse,
 )
 from dag_engine.core.config import settings
-from dag_engine.core.graph import detect_cycles, topological_sort
+from dag_engine.core.graph import detect_cycles, topological_sort, validate_dependency_names
 from dag_engine.db.base import get_db
 from dag_engine.db.models import DagDefinition, TaskDefinition, TaskRun, TaskRunStatus
 
@@ -66,6 +66,18 @@ async def create_dag(
     task_dicts = [
         {"name": t.name, "dependencies": t.dependencies} for t in payload.tasks
     ]
+
+    # Gate 1: dependency names must refer to real tasks in this DAG.
+    # Catches typos like "depnd_on_X" before they cause silent runtime deadlocks.
+    try:
+        validate_dependency_names(task_dicts)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        )
+
+    # Gate 2: the graph must be acyclic.
     if detect_cycles(task_dicts):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,

@@ -12,6 +12,48 @@ Two algorithms are implemented:
 from collections import defaultdict, deque
 
 
+def validate_dependency_names(tasks: list[dict]) -> None:
+    """
+    Validate that every dependency string refers to a real task in the DAG.
+
+    This is the very first gate in the validation pipeline, running before
+    cycle detection or topological sort. Its job is simple but critical:
+    every string listed in a task's dependencies must match the 'name' field
+    of another task in the same DAG.
+
+    Why this matters: the worker resolves dependencies by name at runtime.
+    If a task lists a dependency that does not exist (e.g. a typo), the
+    parent task is never enqueued, the downstream task never progresses past
+    PENDING, and the entire DAG silently deadlocks with no error message.
+
+    Args:
+        tasks: A list of task dicts, each with 'name' and 'dependencies' keys.
+
+    Raises:
+        ValueError: If any dependency name does not match a real task name.
+
+    Example:
+        tasks = [
+            {"name": "extract", "dependencies": []},
+            {"name": "load",    "dependencies": ["TYPO"]},  # <-- raises here
+        ]
+        validate_dependency_names(tasks)
+        # ValueError: Task 'load' lists unknown dependency 'TYPO'.
+        #             Known tasks: extract, load
+    """
+    # Build a set of all known task names for O(1) lookup.
+    # A set is used over a list because `in` on a set is O(1) rather than O(n).
+    known_names: set[str] = {task["name"] for task in tasks}
+
+    for task in tasks:
+        for dep in task["dependencies"]:
+            if dep not in known_names:
+                raise ValueError(
+                    f"Task '{task['name']}' lists unknown dependency '{dep}'. "
+                    f"Known tasks: {', '.join(sorted(known_names))}"
+                )
+
+
 def detect_cycles(tasks: list[dict]) -> bool:
     """
     Detect whether the given task graph contains any cycles using DFS.
