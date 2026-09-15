@@ -16,6 +16,7 @@ from sqlalchemy import (
     ForeignKey,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -91,6 +92,18 @@ class DagDefinition(Base):
 # Stores what command to run and which other tasks must complete first.
 class TaskDefinition(Base):
     __tablename__ = "task_definitions"
+
+    # Compound unique constraint: task names must be unique WITHIN a DAG.
+    # Two different DAGs can both have a task called "clean_data", but
+    # a single DAG cannot have two tasks sharing the same name.
+    #
+    # Why this matters: the worker resolves dependencies by matching task
+    # names (strings) at runtime. If two tasks in the same DAG share a
+    # name, the worker finds multiple matches and the dependency check
+    # becomes ambiguous, leading to tasks running prematurely or deadlocking.
+    __table_args__ = (
+        UniqueConstraint("dag_id", "name", name="uq_task_definition_dag_id_name"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
